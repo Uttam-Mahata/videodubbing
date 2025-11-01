@@ -5,8 +5,10 @@ Centralized configuration using Pydantic BaseSettings
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator
-from typing import Optional
+from typing import Optional, Union
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 
 class Settings(BaseSettings):
@@ -16,7 +18,8 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore"
+        extra="ignore",
+        env_parse_none_str="null"
     )
     
     # Application
@@ -99,7 +102,7 @@ class Settings(BaseSettings):
     log_format: str = "json"  # json or text
     
     # CORS
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    cors_origins: Union[str, list[str]] = "http://localhost:5173,http://localhost:3000"
     
     @field_validator("temp_storage_path")
     @classmethod
@@ -108,12 +111,12 @@ class Settings(BaseSettings):
         os.makedirs(v, exist_ok=True)
         return v
     
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins")
     @classmethod
-    def parse_cors_origins(cls, v):
-        """Parse CORS origins from environment variable"""
+    def parse_cors_origins(cls, v: Union[str, list[str]]) -> list[str]:
+        """Parse CORS origins from comma-separated string or list"""
         if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",")]
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v
 
 
