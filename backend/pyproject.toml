@@ -22,7 +22,6 @@ dependencies = [
     "python-multipart",
     "python-jose[cryptography]",
     "passlib[bcrypt]",
-    "python-dotenv",
 ]
 
 [project.optional-dependencies]
@@ -34,9 +33,6 @@ dev = [
     "ruff",
     "mypy",
 ]
-
-[tool.hatch.build.targets.wheel]
-packages = ["backend"]
 
 [build-system]
 requires = ["hatchling"]
