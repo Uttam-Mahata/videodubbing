@@ -12,6 +12,7 @@ class TranscriptSegment(BaseModel):
     end_time: float = Field(..., description="End time in seconds", ge=0)
     text: str = Field(..., description="Transcribed text")
     confidence: float = Field(..., description="Confidence score", ge=0, le=1)
+    emotion: Optional[str] = Field(default=None, description="Detected emotion (e.g., cheerful, serious, excited)")
     
     class Config:
         json_schema_extra = {
@@ -20,7 +21,8 @@ class TranscriptSegment(BaseModel):
                 "start_time": 0.5,
                 "end_time": 3.2,
                 "text": "Hello and welcome to our presentation.",
-                "confidence": 0.95
+                "confidence": 0.95,
+                "emotion": "cheerful"
             }
         }
 
