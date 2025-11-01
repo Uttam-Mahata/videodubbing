@@ -1,15 +1,17 @@
-"""Google ADK Agents"""
+"""Google ADK Agents for Video Dubbing"""
 
-from .base import BaseCustomAgent
-from .coordinator import CoordinatorAgent
-from .transcription import TranscriptionAgent
-from .translation import TranslationAgent
-from .speech_synthesis import SpeechSynthesisAgent
+from .agent import (
+    root_agent,
+    dubbing_pipeline_agent,
+    transcription_agent,
+    translation_agent,
+    speech_synthesis_agent,
+)
 
 __all__ = [
-    "BaseCustomAgent",
-    "CoordinatorAgent",
-    "TranscriptionAgent",
-    "TranslationAgent",
-    "SpeechSynthesisAgent",
+    "root_agent",
+    "dubbing_pipeline_agent",
+    "transcription_agent",
+    "translation_agent",
+    "speech_synthesis_agent",
 ]
