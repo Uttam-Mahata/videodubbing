@@ -1,11 +1,13 @@
 import { useNavigate } from 'react-router-dom';
 import { Upload, List, Globe, Volume2, Zap, Shield } from 'lucide-react';
+import { Layout } from './Layout';
 
 export function HomePage() {
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
+    <Layout>
+      <div className="bg-gradient-to-br from-blue-50 via-white to-purple-50">
       <div className="max-w-7xl mx-auto px-4 py-12">
         <div className="text-center mb-16">
           <h1 className="text-5xl font-bold text-gray-900 mb-4">
@@ -115,6 +117,7 @@ export function HomePage() {
           </button>
         </div>
       </div>
-    </div>
+      </div>
+    </Layout>
   );
 }
