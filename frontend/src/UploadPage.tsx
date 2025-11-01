@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload as UploadIcon, Loader2 } from 'lucide-react';
+import { Layout } from './Layout';
 import { VideoUpload } from './VideoUpload';
 import { LanguageSelector } from './LanguageSelector';
 import { VoiceConfigurator } from './VoiceConfigurator';
@@ -63,7 +64,7 @@ export function UploadPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <Layout>
       <div className="max-w-4xl mx-auto px-4 py-12">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Upload Video for Dubbing</h1>
@@ -156,6 +157,6 @@ export function UploadPage() {
           </div>
         </form>
       </div>
-    </div>
+    </Layout>
   );
 }

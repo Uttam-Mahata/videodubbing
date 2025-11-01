@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Download, RotateCcw, X, AlertCircle } from 'lucide-react';
+import { Layout } from './Layout';
 import { apiClient } from './api';
 import { ProgressTracker } from './ProgressTracker';
 import { JobStatus } from './types';
@@ -71,35 +72,39 @@ export function JobDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-600">Loading job details...</p>
+      <Layout>
+        <div className="flex items-center justify-center" style={{ minHeight: 'calc(100vh - 128px)' }}>
+          <div className="text-center">
+            <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-gray-600">Loading job details...</p>
+          </div>
         </div>
-      </div>
+      </Layout>
     );
   }
 
   if (error || !job) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center max-w-md">
-          <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Error</h2>
-          <p className="text-gray-600 mb-4">{error || 'Job not found'}</p>
-          <button
-            onClick={() => navigate('/jobs')}
-            className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            Back to Jobs
-          </button>
+      <Layout>
+        <div className="flex items-center justify-center" style={{ minHeight: 'calc(100vh - 128px)' }}>
+          <div className="text-center max-w-md">
+            <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Error</h2>
+            <p className="text-gray-600 mb-4">{error || 'Job not found'}</p>
+            <button
+              onClick={() => navigate('/jobs')}
+              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Back to Jobs
+            </button>
+          </div>
         </div>
-      </div>
+      </Layout>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <Layout>
       <div className="max-w-6xl mx-auto px-4 py-12">
         <button
           onClick={() => navigate('/jobs')}
@@ -185,6 +190,6 @@ export function JobDetailPage() {
           </div>
         </div>
       </div>
-    </div>
+    </Layout>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, RefreshCw } from 'lucide-react';
+import { Layout } from './Layout';
 import { apiClient } from './api';
 import { JobCard } from './JobCard';
 import type { Job } from './types';
@@ -40,7 +41,7 @@ export function JobListPage() {
   const totalPages = Math.ceil(total / pageSize);
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <Layout>
       <div className="max-w-7xl mx-auto px-4 py-12">
         <div className="flex items-center justify-between mb-8">
           <div>
@@ -125,6 +126,6 @@ export function JobListPage() {
           </>
         )}
       </div>
-    </div>
+    </Layout>
   );
 }
