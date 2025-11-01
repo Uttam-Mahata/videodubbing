@@ -41,7 +41,7 @@ The core architecture uses Google ADK's agent patterns for video dubbing pipelin
 - FastAPI for async REST/WebSocket APIs
 - Celery for distributed task queue (separate worker pools: video, AI, merge)
 - Redis for job queue, caching (translation cache, TTS cache, session state)
-- PostgreSQL for job metadata, user accounts, processing logs
+- MongoDB for job metadata, user accounts, processing logs
 - Google Cloud Storage for video files with lifecycle policies (input: 7 days, output: 30 days)
 
 **Frontend**:
@@ -130,7 +130,7 @@ Per README design:
 ### Checkpointing
 Job state machine: `QUEUED → AUDIO_EXTRACTED → TRANSCRIBED → TRANSLATED → SYNTHESIZED → SYNCHRONIZED → MERGED → VALIDATED → COMPLETED`
 - Resume from last successful checkpoint
-- Persistence: Redis + PostgreSQL dual write
+- Persistence: Redis + MongoDB dual write
 - Checkpoint after each major stage
 
 ## Scalability & Performance
@@ -139,7 +139,7 @@ Job state machine: `QUEUED → AUDIO_EXTRACTED → TRANSCRIBED → TRANSLATED �
 - FastAPI: 3-10 replicas (HPA on CPU >70%)
 - Celery workers: Separate pools (video: 5-20, AI: 10-50, merge: 2-4) with auto-scaling on queue depth
 - Redis cluster (3 replicas, StatefulSet)
-- PostgreSQL: Primary + read replicas, PgBouncer connection pooling
+- MongoDB: Replica set with sharding for horizontal scaling
 
 ### Parallel Processing
 - Segment videos at scene boundaries (5-15 min segments, 5s overlap)
@@ -177,7 +177,7 @@ Job state machine: `QUEUED → AUDIO_EXTRACTED → TRANSCRIBED → TRANSLATED �
 | **Google ADK** | Intelligent agent coordination, built-in patterns | Learning curve, Google ecosystem dependency |
 | **Gemini native APIs** | Unified API, controllable TTS, better integration | Limited to Gemini models |
 | **Celery** | Mature task queue, good monitoring | Requires Redis/RabbitMQ |
-| **PostgreSQL** | ACID compliance, JSON support | Not as horizontally scalable as NoSQL |
+| **MongoDB** | Flexible schema, native JSON support, horizontal scaling | Eventual consistency, requires careful schema design |
 | **Parallel segmentation** | 5x speedup for long videos | Coordination complexity |
 
 ## Reference Links

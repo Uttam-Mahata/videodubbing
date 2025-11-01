@@ -73,7 +73,7 @@ A scalable, fault-tolerant video dubbing application leveraging:
 ┌─────────────────────────────────────────────────────────────────┐
 │                      DATA & STORAGE LAYER                        │
 ├─────────────────────────────────────────────────────────────────┤
-│  ├─ PostgreSQL (Metadata)     ├─ Redis (Cache & Queue)          │
+│  ├─ MongoDB (Metadata)        ├─ Redis (Cache & Queue)          │
 │  ├─ Google Cloud Storage      ├─ MinIO (Local Development)      │
 │  └─ Elasticsearch (Logging)   └─ Prometheus (Metrics)           │
 └─────────────────────────────────────────────────────────────────┘
@@ -188,7 +188,7 @@ A scalable, fault-tolerant video dubbing application leveraging:
 │  Input: Video file, Source lang, Target lang, Voice config   │
 │  ├─ Video validation (format, size, duration)                │
 │  ├─ Upload to Google Cloud Storage                           │
-│  ├─ Job record creation in PostgreSQL                        │
+│  ├─ Job record creation in MongoDB                           │
 │  ├─ Initial metadata extraction                              │
 │  └─ Coordinator Agent analysis                               │
 │  Output: Job ID, Processing strategy                         │
@@ -375,7 +375,8 @@ A scalable, fault-tolerant video dubbing application leveraging:
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│              PostgreSQL PRIMARY (Write)                     │
+│              MongoDB REPLICA SET                            │
+│  Primary Node (Write)                                      │
 │  ├─ Job metadata                                           │
 │  ├─ User accounts                                          │
 │  ├─ Processing logs                                        │
@@ -384,12 +385,14 @@ A scalable, fault-tolerant video dubbing application leveraging:
                 │         │
                 ▼         ▼
 ┌──────────────────┐  ┌──────────────────┐
-│  READ REPLICA 1  │  │  READ REPLICA 2  │
+│  SECONDARY 1     │  │  SECONDARY 2     │
 │  (Dashboard)     │  │  (Analytics)     │
 └──────────────────┘  └──────────────────┘
 
-Connection Pooling: PgBouncer (Transaction mode)
-Max Connections: 100 per instance
+Sharding Strategy: Hash-based on job_id for horizontal scaling
+Connection Pooling: MongoDB native connection pooling
+Read Preference: Primary for writes, Secondary for analytics queries
+Max Connections: Configurable per application instance
 ```
 
 #### **3.3.3 Storage Scaling**
@@ -425,7 +428,7 @@ Max Connections: 100 per instance
 | **Gemini API Timeout** | Request timeout | Circuit breaker pattern | Retry with smaller segments |
 | **Network Failure** | Connection error | Retry with jitter (3 attempts) | Queue for later |
 | **Worker Crash** | Celery heartbeat loss | Auto-restart + job reassignment | Alert + manual intervention |
-| **Database Failure** | Connection error | Automatic failover to replica | Read-only mode |
+| **Database Failure** | Connection error | Automatic failover to MongoDB secondary | Read-only mode |
 | **Storage Failure** | Upload/download error | Retry with alternate region | Local temporary storage |
 | **Out of Memory** | Resource monitoring | Kill task + restart with smaller batch | Segment size reduction |
 | **Invalid Audio** | Quality check failure | Loop Agent retry | Notify user for re-upload |
@@ -473,7 +476,7 @@ QUEUED → PROCESSING → COMPLETED
            └─→ VALIDATED
 
 Recovery: Resume from last successful checkpoint
-Persistence: Redis + PostgreSQL (dual write)
+Persistence: Redis + MongoDB (dual write)
 Checkpoint Interval: After each major stage
 ```
 
@@ -642,71 +645,88 @@ WS     /ws/jobs/{job_id}
 
 ## **5. Data Models**
 
-### **5.1 Core Entities**
+### **5.1 Core Entities (MongoDB Collections)**
 
 ```python
-Job:
-├─ id: UUID
-├─ user_id: UUID
-├─ status: Enum [QUEUED, PROCESSING, COMPLETED, FAILED, CANCELLED]
+Job Collection:
+├─ _id: ObjectId
+├─ user_id: ObjectId (reference to User)
+├─ status: String [QUEUED, PROCESSING, COMPLETED, FAILED, CANCELLED]
 ├─ current_stage: String
 ├─ progress_percent: Integer
 ├─ source_language: String (BCP-47 code)
 ├─ target_language: String (BCP-47 code)
-├─ voice_config: JSON
+├─ voice_config: Object
 │  ├─ primary_voice: String
 │  ├─ secondary_voice: String (optional)
 │  └─ style_preferences: Object
 ├─ input_video_url: String
 ├─ output_video_url: String (nullable)
-├─ metadata: JSON
-│  ├─ duration_seconds: Float
-│  ├─ file_size_mb: Float
+├─ metadata: Object
+│  ├─ duration_seconds: Double
+│  ├─ file_size_mb: Double
 │  ├─ resolution: String
 │  ├─ detected_speakers: Integer
-│  └─ processing_time_seconds: Float
-├─ error_message: Text (nullable)
-├─ checkpoints: JSON []
-├─ created_at: Timestamp
-├─ updated_at: Timestamp
-└─ completed_at: Timestamp (nullable)
+│  └─ processing_time_seconds: Double
+├─ error_message: String (nullable)
+├─ checkpoints: Array []
+├─ created_at: Date
+├─ updated_at: Date
+└─ completed_at: Date (nullable)
 
-Transcript:
-├─ id: UUID
-├─ job_id: UUID (FK)
-├─ segments: JSON []
+Indexes:
+├─ user_id + created_at (compound, for user job listing)
+├─ status + created_at (compound, for queue management)
+└─ _id (default, for individual job lookup)
+
+Transcript Collection:
+├─ _id: ObjectId
+├─ job_id: ObjectId (reference to Job)
+├─ segments: Array []
 │  └─ [{
 │      speaker: String,
-│      start_time: Float,
-│      end_time: Float,
+│      start_time: Double,
+│      end_time: Double,
 │      text: String,
-│      confidence: Float
+│      confidence: Double
 │    }]
 └─ language: String
 
-Translation:
-├─ id: UUID
-├─ transcript_id: UUID (FK)
-├─ segments: JSON []
+Indexes:
+└─ job_id (for fast job-based queries)
+
+Translation Collection:
+├─ _id: ObjectId
+├─ job_id: ObjectId (reference to Job)
+├─ transcript_id: ObjectId (reference to Transcript)
+├─ segments: Array []
 │  └─ [{
 │      original_text: String,
 │      translated_text: String,
-│      start_time: Float,
-│      end_time: Float,
+│      start_time: Double,
+│      end_time: Double,
 │      duration_ms: Integer,
 │      emotion_tag: String,
-│      formality: Enum
+│      formality: String
 │    }]
 └─ target_language: String
 
-ProcessingLog:
-├─ id: UUID
-├─ job_id: UUID (FK)
+Indexes:
+├─ job_id (for fast job-based queries)
+└─ transcript_id (for transcript lookups)
+
+ProcessingLog Collection:
+├─ _id: ObjectId
+├─ job_id: ObjectId (reference to Job)
 ├─ stage: String
-├─ status: Enum [SUCCESS, FAILURE, RETRY]
-├─ message: Text
-├─ metadata: JSON
-└─ timestamp: Timestamp
+├─ status: String [SUCCESS, FAILURE, RETRY]
+├─ message: String
+├─ metadata: Object
+└─ timestamp: Date
+
+Indexes:
+├─ job_id + timestamp (compound, for chronological log retrieval)
+└─ timestamp (for time-based queries and TTL expiration)
 ```
 
 ---
@@ -751,7 +771,7 @@ ProcessingLog:
 │                                                            │
 │  At Rest:                                                  │
 │  ├─ Google Cloud Storage encryption (AES-256)             │
-│  ├─ Database encryption (PostgreSQL native)               │
+│  ├─ Database encryption (MongoDB encryption at rest)      │
 │  └─ Encrypted backups                                      │
 │                                                            │
 │  Access Control:                                           │
@@ -890,7 +910,7 @@ Total: 50s (for 10-minute video)
 │  Services:                                                 │
 │  ├─ api-service (LoadBalancer)                            │
 │  ├─ redis-service (ClusterIP)                             │
-│  └─ postgresql-service (ClusterIP)                        │
+│  └─ mongodb-service (ClusterIP)                           │
 │                                                            │
 │  Ingress:                                                  │
 │  ├─ NGINX Ingress Controller                              │
@@ -1143,7 +1163,7 @@ Events:
 | **Gemini native audio APIs** | Unified API, better integration, controllable TTS | Limited to Gemini models |
 | **FastAPI async** | High performance, native async support, OpenAPI docs | Python-specific |
 | **Celery for task queue** | Mature, reliable, good monitoring | Requires Redis/RabbitMQ |
-| **PostgreSQL** | ACID compliance, JSON support, mature ecosystem | Not as horizontally scalable as NoSQL |
+| **MongoDB** | Flexible schema, native JSON/BSON support, horizontal scaling with sharding | Eventual consistency, requires careful schema design |
 | **Google Cloud Storage** | Native integration, CDN, lifecycle policies | Vendor lock-in |
 | **Parallel segment processing** | 5x speedup for long videos | Complexity in coordination |
 
