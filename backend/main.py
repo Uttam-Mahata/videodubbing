@@ -15,6 +15,8 @@ import time
 from backend.config.settings import settings
 from backend.api.routes import jobs, health, voices
 from backend.utils.logging_config import setup_logging
+from backend.db.mongodb import connect_to_mongodb, close_database_connection
+from backend.db.redis_client import connect_to_redis, close_redis_connection
 
 # Setup logging
 setup_logging()
@@ -37,27 +39,52 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Debug mode: {settings.debug}")
     
-    # Initialize Google ADK Runner
-    from google.adk.runners import InMemoryRunner
-    from backend.agents import root_agent
-    
-    runner = InMemoryRunner(
-        agent=root_agent,
-        app_name="videodubbing",
-    )
-    logger.info("✅ Google ADK InMemoryRunner initialized")
-    
-    # TODO: Initialize database connections
-    # TODO: Initialize Redis connection
-    # TODO: Initialize worker queues
+    try:
+        # Initialize database connections
+        
+        # Connect to MongoDB
+        await connect_to_mongodb()
+        
+        # Connect to Redis
+        await connect_to_redis()
+        
+        # Initialize Google ADK Runner
+        from google.adk.runners import InMemoryRunner
+        from backend.agents import root_agent
+        
+        runner = InMemoryRunner(
+            agent=root_agent,
+            app_name="videodubbing",
+        )
+        logger.info("✅ Google ADK InMemoryRunner initialized")
+        
+        # TODO: Initialize Celery worker queues (optional for async processing)
+        
+        logger.info("🚀 Application startup complete")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize application: {e}")
+        raise
     
     yield
     
     # Shutdown
     logger.info("Shutting down application")
-    # TODO: Close database connections
-    # TODO: Close Redis connection
-    runner = None
+    
+    try:
+        # Close database connections
+        await close_database_connection()
+        
+        # Close Redis connection
+        await close_redis_connection()
+        
+        # Cleanup ADK runner
+        runner = None
+        
+        logger.info("✅ Application shutdown complete")
+        
+    except Exception as e:
+        logger.error(f"⚠️ Error during shutdown: {e}")
 
 
 # Create FastAPI app
