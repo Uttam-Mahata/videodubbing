@@ -58,6 +58,23 @@ CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 
 #### Start Required Services
 
+**Option 1: Using Docker Compose (Recommended)**
+```bash
+# Start MongoDB and Redis
+docker-compose up -d
+
+# Verify services are running
+docker-compose ps
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+```
+
+**Option 2: Native Installation**
+
 **MongoDB** (if not running):
 ```bash
 # macOS (using Homebrew)
