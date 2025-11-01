@@ -60,13 +60,19 @@ export function LanguageSelector({
             {loading ? (
               <option>Loading...</option>
             ) : (
-              languages.map((lang) => (
-                <option key={lang.code} value={lang.code}>
-                  {lang.name}
-                </option>
-              ))
+              <>
+                <option value="auto">🤖 Auto-Detect (Recommended)</option>
+                {languages.map((lang) => (
+                  <option key={lang.code} value={lang.code}>
+                    {lang.name}
+                  </option>
+                ))}
+              </>
             )}
           </select>
+          <p className="mt-1 text-xs text-gray-500">
+            {sourceLanguage === 'auto' ? 'AI will detect the language automatically' : 'Manually selected'}
+          </p>
         </div>
 
         <div className="flex justify-center md:mt-8">

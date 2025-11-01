@@ -18,12 +18,8 @@ export function UploadPage() {
   const {
     sourceLanguage,
     targetLanguage,
-    primaryVoice,
-    secondaryVoice,
     setSourceLanguage,
     setTargetLanguage,
-    setPrimaryVoice,
-    setSecondaryVoice,
     setJobId,
   } = useDubbingStore();
 
@@ -45,10 +41,10 @@ export function UploadPage() {
     try {
       const job = await apiClient.uploadVideo(
         selectedFile,
-        sourceLanguage,
+        sourceLanguage === 'auto' ? 'auto' : sourceLanguage,
         targetLanguage,
-        primaryVoice,
-        secondaryVoice || undefined,
+        'Kore', // Default voice, will be auto-assigned by backend
+        undefined, // No secondary voice needed
         setUploadProgress
       );
 
@@ -97,13 +93,7 @@ export function UploadPage() {
 
           <div className="bg-white rounded-lg shadow-md p-6">
             <h2 className="text-xl font-semibold text-gray-900 mb-4">Voice Configuration</h2>
-            <VoiceConfigurator
-              primaryVoice={primaryVoice}
-              secondaryVoice={secondaryVoice}
-              onPrimaryVoiceChange={setPrimaryVoice}
-              onSecondaryVoiceChange={setSecondaryVoice}
-              disabled={isUploading}
-            />
+            <VoiceConfigurator disabled={isUploading} />
           </div>
 
           {error && (

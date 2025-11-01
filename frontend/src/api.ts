@@ -95,4 +95,9 @@ export const apiClient = {
     const response = await api.get<LanguagesResponse>('/languages');
     return response.data;
   },
+
+  getSpeakerAnalysis: async (jobId: string): Promise<import('./types').SpeakerAnalysis> => {
+    const response = await api.get<import('./types').SpeakerAnalysis>(`/jobs/${jobId}/speakers`);
+    return response.data;
+  },
 };

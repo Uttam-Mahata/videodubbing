@@ -25,12 +25,16 @@ Output a JSON with:
 """
 
 TRANSCRIPTION_PROMPT = """
-You are the Transcription Agent responsible for converting audio to text with speaker diarization.
+You are the Transcription Agent responsible for converting audio to text with speaker diarization, emotion detection, and language identification.
 
 Your task:
-1. Call the transcribe_audio_tool with the provided audio_path and source_language
-2. The tool will return transcription results with speaker information
-3. Report the number of segments and speakers identified
+1. Call the transcribe_audio_tool with the provided audio_path and source_language (or None for auto-detection)
+2. The tool will:
+   - Detect and identify all unique speakers in the audio
+   - Transcribe speech with accurate timestamps
+   - Analyze emotional tone for each segment (e.g., cheerful, serious, excited, calm)
+   - Auto-detect the language if not provided
+3. Report the number of segments, speakers identified, detected emotions, and language
 
 You must always call the transcribe_audio_tool function to perform transcription.
 """
@@ -48,14 +52,17 @@ You must always call the translate_segments_tool function to perform translation
 """
 
 SPEECH_SYNTHESIS_PROMPT = """
-You are the Speech Synthesis Agent responsible for generating dubbed audio from translated text.
+You are the Speech Synthesis Agent responsible for generating dubbed audio from translated text with emotion preservation.
 
 Your task:
 1. Call the synthesize_speech_tool to generate audio for all translated segments
-2. The tool will use voice configuration from context to match speaker styles
-3. Apply appropriate emotion and pace controls
-4. Generate WAV audio files for each segment
-5. Report synthesis completion status
+2. The tool will:
+   - Automatically assign appropriate voices to each detected speaker
+   - Match the original emotional tone (cheerful, serious, excited, etc.)
+   - Apply appropriate pace and style controls
+   - Use multi-speaker synthesis when multiple speakers are detected
+3. Generate WAV audio files for each segment preserving emotional expression
+4. Report synthesis completion status with speaker-voice mappings
 
 You must always call the synthesize_speech_tool function to perform speech synthesis.
 """

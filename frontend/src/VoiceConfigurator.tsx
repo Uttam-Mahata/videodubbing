@@ -1,122 +1,55 @@
-import { useState, useEffect } from 'react';
-import { Volume2 } from 'lucide-react';
-import { apiClient } from './api';
-import type { VoiceOption } from './types';
+import { Sparkles, Info } from 'lucide-react';
 
 interface VoiceConfiguratorProps {
-  primaryVoice: string;
-  secondaryVoice: string | null;
-  onPrimaryVoiceChange: (voice: string) => void;
-  onSecondaryVoiceChange: (voice: string | null) => void;
   disabled?: boolean;
 }
 
-export function VoiceConfigurator({
-  primaryVoice,
-  secondaryVoice,
-  onPrimaryVoiceChange,
-  onSecondaryVoiceChange,
-  disabled,
-}: VoiceConfiguratorProps) {
-  const [voices, setVoices] = useState<VoiceOption[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showSecondary, setShowSecondary] = useState(false);
-
-  useEffect(() => {
-    const fetchVoices = async () => {
-      try {
-        const voiceList = await apiClient.getVoices();
-        setVoices(voiceList);
-      } catch (error) {
-        console.error('Failed to fetch voices:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchVoices();
-  }, []);
-
-  const handleAddSecondaryVoice = () => {
-    setShowSecondary(true);
-    if (voices.length > 0) {
-      onSecondaryVoiceChange(voices[0].name);
-    }
-  };
-
-  const handleRemoveSecondaryVoice = () => {
-    setShowSecondary(false);
-    onSecondaryVoiceChange(null);
-  };
-
+export function VoiceConfigurator({ disabled }: VoiceConfiguratorProps) {
   return (
     <div className="space-y-4">
-      <div>
-        <label htmlFor="primary-voice" className="block text-sm font-medium text-gray-700 mb-2">
-          Primary Voice
-        </label>
-        <div className="flex items-center space-x-3">
-          <Volume2 className="w-5 h-5 text-gray-400" />
-          <select
-            id="primary-voice"
-            value={primaryVoice}
-            onChange={(e) => onPrimaryVoiceChange(e.target.value)}
-            disabled={disabled || loading}
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
-          >
-            {loading ? (
-              <option>Loading voices...</option>
-            ) : (
-              voices.map((voice) => (
-                <option key={voice.name} value={voice.name}>
-                  {voice.name} ({voice.style})
-                </option>
-              ))
-            )}
-          </select>
+      <div className="flex items-start space-x-3 p-4 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">
+        <Sparkles className="w-5 h-5 text-purple-600 mt-0.5 flex-shrink-0" />
+        <div className="flex-1">
+          <h4 className="font-medium text-gray-900 mb-2">AI-Powered Voice Selection</h4>
+          <p className="text-sm text-gray-700 mb-3">
+            Our intelligent system will automatically:
+          </p>
+          <ul className="text-sm text-gray-700 space-y-1.5">
+            <li className="flex items-start">
+              <span className="text-purple-600 mr-2">•</span>
+              <span>Detect all speakers in your video</span>
+            </li>
+            <li className="flex items-start">
+              <span className="text-purple-600 mr-2">•</span>
+              <span>Analyze emotional tone and speaking style</span>
+            </li>
+            <li className="flex items-start">
+              <span className="text-purple-600 mr-2">•</span>
+              <span>Assign appropriate voices from our library of 30+ options</span>
+            </li>
+            <li className="flex items-start">
+              <span className="text-purple-600 mr-2">•</span>
+              <span>Match emotions in the dubbed audio (cheerful, serious, excited, etc.)</span>
+            </li>
+          </ul>
         </div>
       </div>
 
-      {showSecondary ? (
+      <div className="flex items-start space-x-3 p-4 bg-blue-50 rounded-lg border border-blue-200">
+        <Info className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
         <div>
-          <label htmlFor="secondary-voice" className="block text-sm font-medium text-gray-700 mb-2">
-            Secondary Voice (Optional)
-          </label>
-          <div className="flex items-center space-x-3">
-            <Volume2 className="w-5 h-5 text-gray-400" />
-            <select
-              id="secondary-voice"
-              value={secondaryVoice || ''}
-              onChange={(e) => onSecondaryVoiceChange(e.target.value || null)}
-              disabled={disabled || loading}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
-            >
-              {loading ? (
-                <option>Loading voices...</option>
-              ) : (
-                voices.map((voice) => (
-                  <option key={voice.name} value={voice.name}>
-                    {voice.name} ({voice.style})
-                  </option>
-                ))
-              )}
-            </select>
-            <button
-              onClick={handleRemoveSecondaryVoice}
-              disabled={disabled}
-              className="px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-            >
-              Remove
-            </button>
-          </div>
+          <p className="text-sm text-gray-700">
+            After uploading, you'll see detailed speaker analysis including the number of speakers detected,
+            assigned voices, and detected emotions. The system uses advanced AI to ensure natural-sounding
+            dubbed audio that preserves the original emotional expression.
+          </p>
         </div>
-      ) : (
-        <button
-          onClick={handleAddSecondaryVoice}
-          disabled={disabled || loading}
-          className="px-4 py-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
-        >
-          Add Secondary Voice
-        </button>
+      </div>
+
+      {disabled && (
+        <div className="text-center py-2">
+          <p className="text-sm text-gray-500">Voice assignment will begin after upload</p>
+        </div>
       )}
     </div>
   );
