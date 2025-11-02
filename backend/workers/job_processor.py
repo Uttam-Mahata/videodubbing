@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any
 from bson import ObjectId
 
 from backend.models.job import Job, JobStatus, JobStage
-from backend.models.transcript import TranscriptSegment
+from backend.models.transcript import Transcript, TranscriptSegment
 from backend.models.translation import TranslationSegment
 from backend.db.mongodb import get_jobs_collection, get_transcripts_collection, get_translations_collection
 from backend.services.storage import StorageService
@@ -155,7 +155,7 @@ class JobProcessor:
                 job_id,
                 JobStatus.TRANSCRIBED,
                 JobStage.TRANSCRIPTION,
-                f"Transcription complete: {len(transcript_result.get('segments', []))} segments"
+                f"Transcription complete: {len(transcript_result.segments)} segments"
             )
             await self._update_job_progress(job_id, 40, "Transcription complete")
             logger.info(f"📊 Job {job_id}: Transcription complete, progress: 40%")
@@ -168,7 +168,8 @@ class JobProcessor:
                 f"Translating to {target_lang} with Gemini LLM"
             )
             
-            segments = transcript_result.get("segments", [])
+            # Convert TranscriptSegment objects to dicts for translation
+            segments = [segment.model_dump() for segment in transcript_result.segments]
             translation_result = await self.llm_service.translate_segments(
                 segments,
                 source_language=source_lang,
@@ -182,7 +183,7 @@ class JobProcessor:
                 job_id,
                 JobStatus.TRANSLATED,
                 JobStage.TRANSLATION,
-                f"Translation complete: {len(translation_result.get('segments', []))} segments"
+                f"Translation complete: {len(translation_result)} segments"
             )
             await self._update_job_progress(job_id, 60, "Translation complete")
             logger.info(f"📊 Job {job_id}: Translation complete, progress: 60%")
@@ -388,17 +389,17 @@ class JobProcessor:
             logger.error(f"Failed to extract audio: {e}", exc_info=True)
             raise
     
-    async def _save_transcript(self, job_id: str, transcript_result: Dict[str, Any]):
+    async def _save_transcript(self, job_id: str, transcript_result: Transcript):
         """Save transcript segments to database"""
         try:
             transcripts_collection = get_transcripts_collection()
             
-            segments = transcript_result.get("segments", [])
+            # Convert Pydantic model to dict for MongoDB
+            segments = [segment.model_dump() for segment in transcript_result.segments]
             transcript_doc = {
                 "job_id": job_id,
-                "language": transcript_result.get("language", "auto"),
+                "language": transcript_result.language,
                 "segments": segments,
-                "total_duration": transcript_result.get("duration", 0),
                 "created_at": datetime.utcnow()
             }
             
@@ -408,16 +409,15 @@ class JobProcessor:
         except Exception as e:
             logger.error(f"Failed to save transcript: {e}")
     
-    async def _save_translations(self, job_id: str, translation_result: Dict[str, Any]):
+    async def _save_translations(self, job_id: str, translation_result: list[TranslationSegment]):
         """Save translation segments to database"""
         try:
             translations_collection = get_translations_collection()
             
-            segments = translation_result.get("segments", [])
+            # Convert Pydantic models to dict for MongoDB
+            segments = [segment.model_dump() for segment in translation_result]
             translation_doc = {
                 "job_id": job_id,
-                "source_language": translation_result.get("source_language"),
-                "target_language": translation_result.get("target_language"),
                 "segments": segments,
                 "created_at": datetime.utcnow()
             }
