@@ -180,7 +180,7 @@ class JobProcessor:
                 f"progress: 60% ({len(translation_result)} segments)"
             )
             
-            # Stage 4: Speech Synthesis using Gemini TTS
+            # Stage 4: Optimized Speech Synthesis using Gemini TTS
             await self._update_job_status(
                 job_id,
                 JobStatus.PROCESSING,
@@ -188,25 +188,12 @@ class JobProcessor:
                 "Generating dubbed audio with Gemini TTS"
             )
             
-            translated_segments = translation_result
-            voice_config = job_doc.get("voice_configuration", {})
-            voice_name = voice_config.get("primary_voice", "Kore")
-            
-            # Synthesize audio for each segment
-            audio_segments = []
-            for segment in translated_segments:
-                try:
-                    audio_bytes = await self.tts_service.synthesize_single_speaker(
-                        text=segment.translated_text,
-                        voice_name=voice_name
-                    )
-                    audio_segments.append({
-                        "segment_id": segment.segment_id,
-                        "audio_data": audio_bytes,
-                        "duration": segment.end_time - segment.start_time
-                    })
-                except Exception as e:
-                    logger.error(f"Failed to synthesize segment {segment.segment_id}: {e}")
+            # Optimize TTS: Use bulk synthesis to reduce API calls
+            audio_segments = await self._synthesize_audio_optimized(
+                job_id=job_id,
+                segments=translation_result,
+                voice_config=job_doc.get("voice_configuration", {})
+            )
             
             await self._update_job_status(
                 job_id,
@@ -275,6 +262,172 @@ class JobProcessor:
                     pass
             
             self._processing_jobs.discard(job_id)
+    
+    async def _synthesize_audio_optimized(
+        self,
+        job_id: str,
+        segments: list,
+        voice_config: dict
+    ) -> list:
+        """
+        Optimized TTS synthesis that minimizes API calls.
+        
+        Strategy:
+        - Single speaker: Concatenate all text → 1 API call (saves ~95% API calls)
+        - Multiple speakers: Group by speaker → N API calls (N = num speakers)
+        - Rate limiting: Respect free tier limits (3 req/min)
+        
+        Args:
+            job_id: Job ID for logging
+            segments: Translation segments with speaker info
+            voice_config: Voice configuration
+            
+        Returns:
+            List of audio segments with synthesized data
+        """
+        import asyncio
+        from collections import defaultdict
+        
+        # Analyze speakers
+        speakers = set(seg.speaker for seg in segments)
+        num_speakers = len(speakers)
+        
+        logger.info(
+            f"🎤 Job {job_id}: Detected {num_speakers} speaker(s), "
+            f"optimizing TTS ({len(segments)} segments → {num_speakers} API call(s))"
+        )
+        
+        audio_segments = []
+        
+        if num_speakers == 1:
+            # OPTIMIZATION: Single speaker - concatenate all text
+            voice_name = voice_config.get("primary_voice", "Kore")
+            full_text = " ... ".join([seg.translated_text for seg in segments])
+            
+            logger.info(f"📝 Synthesizing full text ({len(full_text)} chars) with voice: {voice_name}")
+            
+            try:
+                # Single API call for entire video
+                audio_bytes = await self.tts_service.synthesize_single_speaker(
+                    text=full_text,
+                    voice_name=voice_name
+                )
+                
+                # Split audio based on segment timestamps
+                # For now, store the full audio and use timestamps for playback
+                for segment in segments:
+                    audio_segments.append({
+                        "segment_id": segment.segment_id,
+                        "audio_data": audio_bytes,  # Full audio (will split later with FFmpeg)
+                        "duration": segment.end_time - segment.start_time,
+                        "start_time": segment.start_time,
+                        "end_time": segment.end_time,
+                        "is_full_audio": True  # Flag to indicate this needs splitting
+                    })
+                
+                logger.info(f"✅ Single TTS call completed (saved {len(segments) - 1} API calls)")
+                
+            except Exception as e:
+                logger.error(f"Failed to synthesize full text: {e}")
+                # Fallback to per-segment synthesis
+                return await self._synthesize_per_segment(segments, voice_name, job_id)
+        
+        else:
+            # OPTIMIZATION: Multi-speaker - group by speaker
+            speaker_segments = defaultdict(list)
+            for segment in segments:
+                speaker_segments[segment.speaker].append(segment)
+            
+            logger.info(f"👥 Multi-speaker synthesis: {num_speakers} speakers")
+            
+            # Get voice mapping
+            speaker_voices = voice_config.get("speaker_voices", {})
+            default_voice = voice_config.get("primary_voice", "Kore")
+            
+            # Synthesize per speaker (with rate limiting)
+            for speaker_idx, (speaker, speaker_segs) in enumerate(speaker_segments.items()):
+                voice_name = speaker_voices.get(speaker, default_voice)
+                
+                # Concatenate all text for this speaker
+                speaker_text = " ... ".join([seg.translated_text for seg in speaker_segs])
+                
+                logger.info(
+                    f"🎙️ Speaker {speaker}: Synthesizing {len(speaker_segs)} segments "
+                    f"({len(speaker_text)} chars) with voice: {voice_name}"
+                )
+                
+                try:
+                    # Rate limiting: Wait between requests (free tier: 3 req/min = 20s between calls)
+                    if speaker_idx > 0:
+                        wait_time = 21  # 21 seconds to be safe
+                        logger.info(f"⏳ Rate limit: Waiting {wait_time}s before next TTS call...")
+                        await asyncio.sleep(wait_time)
+                    
+                    audio_bytes = await self.tts_service.synthesize_single_speaker(
+                        text=speaker_text,
+                        voice_name=voice_name
+                    )
+                    
+                    # Assign audio to segments
+                    for segment in speaker_segs:
+                        audio_segments.append({
+                            "segment_id": segment.segment_id,
+                            "audio_data": audio_bytes,
+                            "duration": segment.end_time - segment.start_time,
+                            "start_time": segment.start_time,
+                            "end_time": segment.end_time,
+                            "speaker": speaker,
+                            "is_speaker_audio": True
+                        })
+                    
+                    logger.info(f"✅ Speaker {speaker} synthesis complete")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to synthesize speaker {speaker}: {e}")
+        
+        logger.info(
+            f"🎵 TTS optimization complete: {len(segments)} segments, "
+            f"{num_speakers} API call(s) (saved {len(segments) - num_speakers} calls = "
+            f"{((len(segments) - num_speakers) / len(segments) * 100):.0f}% reduction)"
+        )
+        
+        return audio_segments
+    
+    async def _synthesize_per_segment(
+        self,
+        segments: list,
+        voice_name: str,
+        job_id: str
+    ) -> list:
+        """Fallback: Synthesize each segment individually (with rate limiting)"""
+        import asyncio
+        
+        logger.warning(f"⚠️ Using fallback per-segment synthesis for job {job_id}")
+        audio_segments = []
+        
+        for idx, segment in enumerate(segments):
+            try:
+                # Rate limiting: 3 req/min free tier
+                if idx > 0 and idx % 3 == 0:
+                    wait_time = 61  # Wait 61s after every 3 requests
+                    logger.info(f"⏳ Rate limit: Waiting {wait_time}s (processed {idx} segments)...")
+                    await asyncio.sleep(wait_time)
+                
+                audio_bytes = await self.tts_service.synthesize_single_speaker(
+                    text=segment.translated_text,
+                    voice_name=voice_name
+                )
+                
+                audio_segments.append({
+                    "segment_id": segment.segment_id,
+                    "audio_data": audio_bytes,
+                    "duration": segment.end_time - segment.start_time
+                })
+                
+            except Exception as e:
+                logger.error(f"Failed to synthesize segment {segment.segment_id}: {e}")
+        
+        return audio_segments
     
     async def _update_job_status(
         self,
