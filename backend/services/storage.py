@@ -29,7 +29,12 @@ class StorageService:
     def __init__(self):
         """Initialize Google Cloud Storage client"""
         self._client = None
-        self._force_mock = False  # Flag to force mock mode after billing error
+        self._force_mock = settings.use_local_storage  # Flag to force mock mode
+        
+        # If forced to use local storage, skip GCS initialization
+        if settings.use_local_storage:
+            logger.info("📁 Using local storage (USE_LOCAL_STORAGE=true)")
+            return
         
         # Try to initialize GCS client
         try:
@@ -50,9 +55,11 @@ class StorageService:
                 else:
                     logger.warning(f"⚠️ Failed to initialize GCS client: {gcloud_error}")
                     logger.info("Running in mock mode for development")
+                    self._force_mock = True
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize GCS client: {e}")
             logger.info("Running in mock mode for development")
+            self._force_mock = True
     
     @property
     def is_mock_mode(self) -> bool:
@@ -188,14 +195,28 @@ class StorageService:
         if self.is_mock_mode:
             # Mock mode: copy from temp storage
             mock_path = os.path.join(settings.temp_storage_path, blob_name)
-            if os.path.exists(mock_path):
+            logger.info(f"📁 Mock mode: downloading from {mock_path} to {local_path}")
+            
+            if not os.path.exists(mock_path):
+                raise FileNotFoundError(f"Source file not found: {mock_path}")
+            
+            file_size = os.path.getsize(mock_path)
+            logger.info(f"📦 Source file size: {file_size / (1024*1024):.2f} MB")
+            
+            try:
                 async with aiofiles.open(mock_path, 'rb') as src:
                     content = await src.read()
+                    logger.info(f"✅ Read {len(content)} bytes from source")
                     async with aiofiles.open(local_path, 'wb') as dst:
                         await dst.write(content)
-                logger.info(f"📁 Mock download: copied from {mock_path}")
-            else:
-                logger.warning(f"⚠️ Mock file not found: {mock_path}")
+                        logger.info(f"✅ Wrote {len(content)} bytes to {local_path}")
+                
+                # Verify the download
+                downloaded_size = os.path.getsize(local_path)
+                logger.info(f"📁 Mock download complete: {downloaded_size / (1024*1024):.2f} MB")
+            except Exception as e:
+                logger.error(f"❌ Failed to copy file: {e}", exc_info=True)
+                raise
             return
         
         # Real GCS download

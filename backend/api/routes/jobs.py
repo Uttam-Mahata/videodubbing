@@ -89,6 +89,7 @@ async def create_job(
         job = Job(
             user_id=user_id,
             status=JobStatus.QUEUED,
+            current_stage=JobStage.INTAKE,
             source_language=source_language,
             target_language=target_language,
             voice_config=voice_config,

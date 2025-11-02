@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     gcs_bucket_output: str = "videos-output"
     gcs_project_id: Optional[str] = Field(default=None, validation_alias="GCS_PROJECT_ID")
     gcs_credentials_path: Optional[str] = Field(default=None, validation_alias="GOOGLE_APPLICATION_CREDENTIALS")
+    use_local_storage: bool = False  # Force local storage instead of GCS
     
     # MongoDB
     mongodb_url: str = Field(default="mongodb://localhost:27017", validation_alias="MONGODB_URL")

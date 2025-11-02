@@ -58,10 +58,13 @@ class JobProcessor:
                 # Find jobs that need processing
                 jobs_collection = get_jobs_collection()
                 
+                # Look for QUEUED jobs (either new or retrying)
                 pending_jobs = await jobs_collection.find({
-                    "status": JobStatus.QUEUED.value,
-                    "current_stage": JobStage.INTAKE.value
+                    "status": JobStatus.QUEUED.value
                 }).to_list(length=10)
+                
+                if pending_jobs:
+                    logger.info(f"Found {len(pending_jobs)} pending job(s) to process")
                 
                 for job_doc in pending_jobs:
                     job_id = str(job_doc["_id"])
@@ -132,8 +135,18 @@ class JobProcessor:
             
             transcript_result = await self.audio_service.transcribe_audio(
                 audio_path,
-                source_language=source_lang
+                language=source_lang,
+                job_id=job_id
             )
+            
+            # Update job with detected language if it was auto
+            if source_lang == "auto" and hasattr(transcript_result, 'language') and transcript_result.language:
+                jobs_collection = get_jobs_collection()
+                await jobs_collection.update_one(
+                    {"_id": ObjectId(job_id)},
+                    {"$set": {"source_language": transcript_result.language}}
+                )
+                logger.info(f"✅ Updated job source_language from 'auto' to '{transcript_result.language}'")
             
             # Save transcript to database
             await self._save_transcript(job_id, transcript_result)
@@ -145,6 +158,7 @@ class JobProcessor:
                 f"Transcription complete: {len(transcript_result.get('segments', []))} segments"
             )
             await self._update_job_progress(job_id, 40, "Transcription complete")
+            logger.info(f"📊 Job {job_id}: Transcription complete, progress: 40%")
             
             # Stage 3: Translation using Gemini LLM
             await self._update_job_status(
@@ -171,6 +185,7 @@ class JobProcessor:
                 f"Translation complete: {len(translation_result.get('segments', []))} segments"
             )
             await self._update_job_progress(job_id, 60, "Translation complete")
+            logger.info(f"📊 Job {job_id}: Translation complete, progress: 60%")
             
             # Stage 4: Speech Synthesis using Gemini TTS
             await self._update_job_status(
@@ -180,22 +195,34 @@ class JobProcessor:
                 "Generating dubbed audio with Gemini TTS"
             )
             
-            translated_segments = translation_result.get("segments", [])
+            translated_segments = translation_result
             voice_config = job_doc.get("voice_configuration", {})
+            voice_name = voice_config.get("primary_voice", "Kore")
             
-            tts_result = await self.tts_service.synthesize_speech(
-                translated_segments,
-                voice_name=voice_config.get("voice_name", "Kore"),
-                target_language=target_lang
-            )
+            # Synthesize audio for each segment
+            audio_segments = []
+            for segment in translated_segments:
+                try:
+                    audio_bytes = await self.tts_service.synthesize_single_speaker(
+                        text=segment.translated_text,
+                        voice_name=voice_name
+                    )
+                    audio_segments.append({
+                        "segment_id": segment.segment_id,
+                        "audio_data": audio_bytes,
+                        "duration": segment.end_time - segment.start_time
+                    })
+                except Exception as e:
+                    logger.error(f"Failed to synthesize segment {segment.segment_id}: {e}")
             
             await self._update_job_status(
                 job_id,
                 JobStatus.SYNTHESIZED,
                 JobStage.SPEECH_SYNTHESIS,
-                f"Speech synthesis complete: {len(tts_result.get('audio_segments', []))} audio segments"
+                f"Speech synthesis complete: {len(audio_segments)} audio segments"
             )
             await self._update_job_progress(job_id, 80, "Speech synthesis complete")
+            logger.info(f"📊 Job {job_id}: Speech synthesis complete, progress: 80%")
             
             # Stage 5: Timing Sync & Audio Merging (simplified for now)
             await self._update_job_status(
@@ -329,17 +356,36 @@ class JobProcessor:
         
         try:
             # Download video from storage
+            logger.info(f"Downloading video from: {video_url}")
             await self.storage_service.download_file(video_url, video_path)
+            logger.info(f"Video downloaded to: {video_path}")
             
-            # Extract audio using FFmpeg (simplified - just copy for now)
-            # In production, use: ffmpeg -i video.mp4 -vn -acodec pcm_s16le -ar 16000 audio.wav
-            import shutil
-            shutil.copy(video_path, audio_path)
+            # Extract audio using FFmpeg
+            logger.info(f"Extracting audio with FFmpeg...")
+            import subprocess
+            result = subprocess.run(
+                [
+                    'ffmpeg',
+                    '-i', video_path,
+                    '-vn',  # No video
+                    '-acodec', 'pcm_s16le',  # PCM 16-bit
+                    '-ar', '16000',  # 16kHz sample rate
+                    '-ac', '1',  # Mono
+                    '-y',  # Overwrite output
+                    audio_path
+                ],
+                capture_output=True,
+                text=True
+            )
             
+            if result.returncode != 0:
+                raise RuntimeError(f"FFmpeg failed: {result.stderr}")
+            
+            logger.info(f"Audio extracted to: {audio_path}")
             return video_path, audio_path
             
         except Exception as e:
-            logger.error(f"Failed to extract audio: {e}")
+            logger.error(f"Failed to extract audio: {e}", exc_info=True)
             raise
     
     async def _save_transcript(self, job_id: str, transcript_result: Dict[str, Any]):
