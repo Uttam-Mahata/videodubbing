@@ -19,6 +19,7 @@ from backend.services.storage import StorageService
 from backend.services.gemini_audio import GeminiAudioService
 from backend.services.gemini_llm import GeminiLLMService
 from backend.services.gemini_tts import GeminiTTSService
+from backend.services.gemini_unified import GeminiUnifiedService
 from backend.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -32,8 +33,9 @@ class JobProcessor:
     
     def __init__(self):
         self.storage_service = StorageService()
-        self.audio_service = GeminiAudioService()
-        self.llm_service = GeminiLLMService()
+        self.unified_service = GeminiUnifiedService()  # New unified service
+        self.audio_service = GeminiAudioService()  # Keep for potential fallback
+        self.llm_service = GeminiLLMService()  # Keep for potential fallback
         self.tts_service = GeminiTTSService()
         self._running = False
         self._processing_jobs = set()
@@ -124,69 +126,59 @@ class JobProcessor:
                 "Audio extraction complete"
             )
             await self._update_job_progress(job_id, 20, "Audio extracted successfully")
-            
-            # Stage 2: Transcription using Gemini Audio API
+
+            # Stage 2: Unified Transcription + Translation using Gemini API
+            # This combines what were previously two separate stages into a single API call
             await self._update_job_status(
                 job_id,
                 JobStatus.PROCESSING,
                 JobStage.TRANSCRIPTION,
-                "Transcribing audio with Gemini Audio API (speaker detection)"
+                f"Transcribing and translating audio (unified) to {target_lang}"
             )
-            
-            transcript_result = await self.audio_service.transcribe_audio(
-                audio_path,
-                language=source_lang,
+
+            # Pass None to Gemini if language is "auto" for detection
+            lang_for_api = None if source_lang == "auto" else source_lang
+
+            # Single unified API call for transcription + translation
+            unified_result = await self.unified_service.transcribe_and_translate(
+                audio_path=audio_path,
+                target_language=target_lang,
+                source_language=lang_for_api,
                 job_id=job_id
             )
-            
+
             # Update job with detected language if it was auto
-            if source_lang == "auto" and hasattr(transcript_result, 'language') and transcript_result.language:
+            if source_lang == "auto" and unified_result.source_language:
+                logger.info(f"🌍 Language detected: {unified_result.source_language}, updating job...")
                 jobs_collection = get_jobs_collection()
                 await jobs_collection.update_one(
                     {"_id": ObjectId(job_id)},
-                    {"$set": {"source_language": transcript_result.language}}
+                    {"$set": {"source_language": unified_result.source_language}}
                 )
-                logger.info(f"✅ Updated job source_language from 'auto' to '{transcript_result.language}'")
-            
+                logger.info(f"✅ Updated job source_language from 'auto' to '{unified_result.source_language}'")
+
+            # Extract transcript and translation from unified result
+            transcript_result = unified_result.get_transcript()
+            translation_result = unified_result.get_translations()
+
             # Save transcript to database
             await self._save_transcript(job_id, transcript_result)
-            
-            await self._update_job_status(
-                job_id,
-                JobStatus.TRANSCRIBED,
-                JobStage.TRANSCRIPTION,
-                f"Transcription complete: {len(transcript_result.segments)} segments"
-            )
-            await self._update_job_progress(job_id, 40, "Transcription complete")
-            logger.info(f"📊 Job {job_id}: Transcription complete, progress: 40%")
-            
-            # Stage 3: Translation using Gemini LLM
-            await self._update_job_status(
-                job_id,
-                JobStatus.PROCESSING,
-                JobStage.TRANSLATION,
-                f"Translating to {target_lang} with Gemini LLM"
-            )
-            
-            # Convert TranscriptSegment objects to dicts for translation
-            segments = [segment.model_dump() for segment in transcript_result.segments]
-            translation_result = await self.llm_service.translate_segments(
-                segments,
-                source_language=source_lang,
-                target_language=target_lang
-            )
-            
+
             # Save translations to database
             await self._save_translations(job_id, translation_result)
-            
+
+            # Update status to TRANSLATED (skip TRANSCRIBED status since we do both at once)
             await self._update_job_status(
                 job_id,
                 JobStatus.TRANSLATED,
                 JobStage.TRANSLATION,
-                f"Translation complete: {len(translation_result)} segments"
+                f"Unified transcription+translation complete: {len(translation_result)} segments"
             )
-            await self._update_job_progress(job_id, 60, "Translation complete")
-            logger.info(f"📊 Job {job_id}: Translation complete, progress: 60%")
+            await self._update_job_progress(job_id, 60, "Transcription and translation complete")
+            logger.info(
+                f"📊 Job {job_id}: Unified transcription+translation complete, "
+                f"progress: 60% ({len(translation_result)} segments)"
+            )
             
             # Stage 4: Speech Synthesis using Gemini TTS
             await self._update_job_status(

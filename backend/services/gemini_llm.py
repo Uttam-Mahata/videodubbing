@@ -78,23 +78,25 @@ class GeminiLLMService:
         # Batch segments for efficient processing
         translated_segments = []
         batch_size = 10  # Process 10 segments at a time
-        
+
         for i in range(0, len(segments), batch_size):
             batch = segments[i:i + batch_size]
-            
+            batch_start_idx = i  # Track the starting index for this batch
+
             try:
                 batch_result = await self.circuit_breaker.call(
                     self._translate_batch,
                     batch,
                     system_instruction,
-                    model
+                    model,
+                    batch_start_idx
                 )
                 translated_segments.extend(batch_result)
-                
+
             except Exception as e:
                 logger.error(f"Failed to translate batch {i}-{i+batch_size}: {e}")
                 raise
-        
+
         logger.info(f"Translation completed: {len(translated_segments)} segments")
         return translated_segments
     
@@ -103,21 +105,23 @@ class GeminiLLMService:
         segments: list[dict],
         system_instruction: str,
         model: str,
+        batch_start_idx: int = 0,
     ) -> list[TranslationSegment]:
         """Translate a batch of segments"""
-        
+
         # Format segments for translation
         segments_text = "\n".join([
             f"{i+1}. [{seg.get('start_time')}-{seg.get('end_time')}s] {seg.get('text')}"
             for i, seg in enumerate(segments)
         ])
-        
+
         prompt = (
             f"Translate the following segments and provide translations with metadata:\n\n"
             f"{segments_text}\n\n"
-            f"For each segment, provide: translated_text, emotion_tag, formality_level"
+            f"For each segment, provide: segment_id, translated_text, emotion_tag, formality_level\n"
+            f"Use segment_id format: seg_{{index}}_{{start_time}}"
         )
-        
+
         response = self.client.models.generate_content(
             model=model,
             contents=prompt,
@@ -127,8 +131,17 @@ class GeminiLLMService:
                 system_instruction=system_instruction,
             )
         )
-        
-        return response.parsed
+
+        # Ensure segment_ids are set correctly if Gemini doesn't provide them
+        parsed_segments = response.parsed
+        for i, seg in enumerate(parsed_segments):
+            if not hasattr(seg, 'segment_id') or not seg.segment_id:
+                # Generate segment_id if missing
+                original_segment = segments[i] if i < len(segments) else {}
+                start_time = original_segment.get('start_time', 0)
+                seg.segment_id = f"seg_{batch_start_idx + i}_{start_time}"
+
+        return parsed_segments
     
     async def generate_content(
         self,

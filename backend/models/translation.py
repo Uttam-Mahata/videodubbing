@@ -7,6 +7,7 @@ from typing import Optional
 
 class TranslationSegment(BaseModel):
     """Individual translated segment with metadata"""
+    segment_id: str = Field(..., description="Unique segment identifier")
     original_text: str = Field(..., description="Original text")
     translated_text: str = Field(..., description="Translated text")
     start_time: float = Field(..., description="Start time in seconds", ge=0)
@@ -18,6 +19,7 @@ class TranslationSegment(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
+                "segment_id": "seg_0_0.5",
                 "original_text": "Hello and welcome",
                 "translated_text": "Hola y bienvenidos",
                 "start_time": 0.5,
