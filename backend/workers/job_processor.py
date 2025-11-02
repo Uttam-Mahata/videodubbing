@@ -7,6 +7,7 @@ import logging
 import asyncio
 import os
 import tempfile
+import wave
 from datetime import datetime
 from typing import Optional, Dict, Any
 from bson import ObjectId
@@ -189,9 +190,10 @@ class JobProcessor:
             )
             
             # Optimize TTS: Use bulk synthesis to reduce API calls
+            # Pass unified segments (which have speaker info) instead of translation_result
             audio_segments = await self._synthesize_audio_optimized(
                 job_id=job_id,
-                segments=translation_result,
+                segments=unified_result.segments,  # Use unified segments with speaker info
                 voice_config=job_doc.get("voice_configuration", {})
             )
             
@@ -204,20 +206,43 @@ class JobProcessor:
             await self._update_job_progress(job_id, 80, "Speech synthesis complete")
             logger.info(f"📊 Job {job_id}: Speech synthesis complete, progress: 80%")
             
-            # Stage 5: Timing Sync & Audio Merging (simplified for now)
+            # Stage 5: Audio Merging - Create final dubbed video
             await self._update_job_status(
                 job_id,
-                JobStatus.SYNCHRONIZED,
-                JobStage.TIMING_SYNC,
-                "Synchronizing audio timing"
+                JobStatus.PROCESSING,
+                JobStage.AUDIO_MERGING,
+                "Merging dubbed audio with video"
             )
-            await self._update_job_progress(job_id, 90, "Timing synchronized")
+            await self._update_job_progress(job_id, 85, "Merging audio with video")
+            
+            # Merge audio with video using FFmpeg
+            output_video_path = await self._merge_audio_with_video(
+                video_path=video_path,
+                audio_segments=audio_segments,
+                job_id=job_id
+            )
+            
+            # Upload final video to storage
+            output_filename = f"dubbed_{os.path.basename(video_path)}"
+            output_url = await self.storage_service.upload_file(
+                output_video_path,
+                f"gs://videos-output/dubbed/{output_filename}"
+            )
+            
+            # Update job with output URL
+            jobs_collection = get_jobs_collection()
+            await jobs_collection.update_one(
+                {"_id": ObjectId(job_id)},
+                {"$set": {"output_video_url": output_url}}
+            )
+            
+            logger.info(f"🎬 Output video uploaded: {output_url}")
             
             await self._update_job_status(
                 job_id,
                 JobStatus.MERGED,
                 JobStage.AUDIO_MERGING,
-                "Merging dubbed audio with video"
+                f"Audio merged successfully"
             )
             await self._update_job_progress(job_id, 95, "Audio merged")
             
@@ -239,6 +264,7 @@ class JobProcessor:
             )
             
             logger.info(f"✅ Job completed successfully: {job_id}")
+            logger.info(f"📦 Output available at: {output_url}")
             
         except Exception as e:
             logger.error(f"❌ Job failed: {job_id} - {e}", exc_info=True)
@@ -392,6 +418,109 @@ class JobProcessor:
         )
         
         return audio_segments
+    
+    async def _merge_audio_with_video(
+        self,
+        video_path: str,
+        audio_segments: list,
+        job_id: str
+    ) -> str:
+        """
+        Merge synthesized audio with original video using FFmpeg.
+        
+        Args:
+            video_path: Path to original video file
+            audio_segments: List of audio segments with synthesized data
+            job_id: Job ID for logging
+            
+        Returns:
+            Path to output video with dubbed audio
+        """
+        import subprocess
+        import wave
+        
+        logger.info(f"🎬 Starting audio-video merge for job {job_id}")
+        
+        # Create temp file for dubbed audio
+        dubbed_audio_path = os.path.join(
+            tempfile.gettempdir(),
+            f"dubbed_audio_{os.urandom(8).hex()}.wav"
+        )
+        
+        # For single-speaker optimization, we already have the full audio
+        # Just need to save it to a file
+        if len(audio_segments) > 0 and audio_segments[0].get('is_full_audio'):
+            # Single audio file for entire video
+            audio_data = audio_segments[0]['audio_data']
+            
+            # Write PCM audio data as proper WAV file
+            # Gemini TTS returns 24kHz, 16-bit, mono PCM
+            with wave.open(dubbed_audio_path, 'wb') as wf:
+                wf.setnchannels(1)        # Mono
+                wf.setsampwidth(2)        # 16-bit (2 bytes)
+                wf.setframerate(24000)    # 24kHz
+                wf.writeframes(audio_data)
+            
+            logger.info(f"💾 Saved full dubbed audio as WAV: {os.path.getsize(dubbed_audio_path)} bytes")
+        else:
+            # TODO: Multi-segment merge (concatenate multiple audio segments)
+            # For now, use the first segment as a placeholder
+            if audio_segments:
+                with wave.open(dubbed_audio_path, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(24000)
+                    wf.writeframes(audio_segments[0]['audio_data'])
+                logger.warning(f"⚠️ Using single segment audio (multi-segment merge not yet implemented)")
+        
+        # Create output video path
+        output_video_path = os.path.join(
+            tempfile.gettempdir(),
+            f"output_{os.urandom(8).hex()}.mp4"
+        )
+        
+        # Use FFmpeg to replace audio in video
+        logger.info(f"🔧 Running FFmpeg to merge audio with video...")
+        try:
+            result = subprocess.run(
+                [
+                    'ffmpeg',
+                    '-i', video_path,           # Input video
+                    '-i', dubbed_audio_path,    # Input dubbed audio
+                    '-c:v', 'copy',             # Copy video stream (no re-encoding)
+                    '-c:a', 'aac',              # Encode audio as AAC
+                    '-map', '0:v:0',            # Use video from first input
+                    '-map', '1:a:0',            # Use audio from second input
+                    '-shortest',                # Match shortest stream duration
+                    '-y',                       # Overwrite output
+                    output_video_path
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"FFmpeg stderr: {result.stderr}")
+                raise RuntimeError(f"FFmpeg merge failed: {result.stderr}")
+            
+            output_size = os.path.getsize(output_video_path)
+            logger.info(f"✅ Audio-video merge complete: {output_size / (1024*1024):.2f} MB")
+            
+            # Cleanup temp audio file
+            try:
+                os.remove(dubbed_audio_path)
+            except:
+                pass
+            
+            return output_video_path
+            
+        except subprocess.TimeoutExpired:
+            logger.error(f"FFmpeg merge timed out after 5 minutes")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to merge audio with video: {e}")
+            raise
     
     async def _synthesize_per_segment(
         self,
