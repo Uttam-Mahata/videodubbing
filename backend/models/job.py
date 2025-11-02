@@ -43,6 +43,8 @@ class VideoMetadata(BaseModel):
     resolution: str
     fps: Optional[float] = None
     detected_speakers: Optional[int] = None
+    detected_language: Optional[str] = None
+    language_confidence: Optional[float] = None
     processing_time_seconds: Optional[float] = None
 
 
@@ -51,6 +53,8 @@ class VoiceConfiguration(BaseModel):
     primary_voice: str = "Kore"
     secondary_voice: Optional[str] = None
     style_preferences: dict = Field(default_factory=dict)
+    auto_assign_voices: bool = Field(default=True, description="Auto-assign voices based on speaker analysis")
+    speaker_voice_map: dict[str, str] = Field(default_factory=dict, description="Speaker ID to voice name mapping")
     
     @field_validator("primary_voice")
     @classmethod

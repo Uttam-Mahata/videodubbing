@@ -2,41 +2,41 @@
 # Production dependencies for FastAPI backend with Google ADK and Gemini APIs
 
 # Core Framework
-fastapi>=0.119.0
-uvicorn[standard]>=0.32.0
-pydantic>=2.10.0
-pydantic-settings>=2.6.0
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
 
 # Google APIs
-google-genai>=1.45.0
-google-adk>=1.17.0  # Note: May need to verify package name
-google-cloud-storage>=2.18.0
+google-genai
+google-adk
+google-cloud-storage
 
 # Database
-motor>=3.6.0  # Async MongoDB driver
-pymongo>=4.10.0
-redis>=5.2.0
+motor
+pymongo
+redis
 
 # Task Queue
-celery>=5.4.0
-kombu>=5.4.0
+celery
+kombu
 
 # HTTP & Async
-httpx>=0.27.0
-aiofiles>=24.1.0
+httpx
+aiofiles
 
 # Logging
-python-json-logger>=3.2.0
+python-json-logger
 
 # Utils
-python-multipart>=0.0.17  # File uploads
-python-jose[cryptography]>=3.3.0  # JWT
-passlib[bcrypt]>=1.7.4  # Password hashing
+python-multipart
+python-jose[cryptography]
+passlib[bcrypt]
 
 # Development
-pytest>=8.3.0
-pytest-asyncio>=0.24.0
-pytest-cov>=6.0.0
-black>=24.10.0
-ruff>=0.8.0
-mypy>=1.13.0
+pytest
+pytest-asyncio
+pytest-cov
+black
+ruff
+mypy

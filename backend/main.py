@@ -17,6 +17,7 @@ from backend.api.routes import jobs, health, voices
 from backend.utils.logging_config import setup_logging
 from backend.db.mongodb import connect_to_mongodb, close_database_connection
 from backend.db.redis_client import connect_to_redis, close_redis_connection
+from backend.workers import start_job_processor, stop_job_processor
 
 # Setup logging
 setup_logging()
@@ -58,7 +59,9 @@ async def lifespan(app: FastAPI):
         )
         logger.info("✅ Google ADK InMemoryRunner initialized")
         
-        # TODO: Initialize Celery worker queues (optional for async processing)
+        # Start background job processor
+        await start_job_processor()
+        logger.info("✅ Background job processor started")
         
         logger.info("🚀 Application startup complete")
         
@@ -72,6 +75,9 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down application")
     
     try:
+        # Stop background job processor
+        await stop_job_processor()
+        
         # Close database connections
         await close_database_connection()
         

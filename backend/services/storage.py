@@ -29,23 +29,42 @@ class StorageService:
     def __init__(self):
         """Initialize Google Cloud Storage client"""
         self._client = None
+        self._force_mock = settings.use_local_storage  # Flag to force mock mode
         
-        # Try to initialize GCS client if credentials are available
-        if settings.gcs_credentials_path and os.path.exists(settings.gcs_credentials_path):
+        # If forced to use local storage, skip GCS initialization
+        if settings.use_local_storage:
+            logger.info("📁 Using local storage (USE_LOCAL_STORAGE=true)")
+            return
+        
+        # Try to initialize GCS client
+        try:
+            from google.cloud import storage
+            
+            # Try gcloud CLI authentication first
             try:
-                from google.cloud import storage
                 self._client = storage.Client(project=settings.gcs_project_id)
-                logger.info("✅ Google Cloud Storage client initialized")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to initialize GCS client: {e}")
-                logger.info("Running in mock mode for development")
-        else:
-            logger.info("Running StorageService in mock mode (no GCS credentials)")
+                logger.info("✅ Google Cloud Storage client initialized (using gcloud auth)")
+            except Exception as gcloud_error:
+                # Fallback to credentials file if provided
+                if settings.gcs_credentials_path and os.path.exists(settings.gcs_credentials_path):
+                    self._client = storage.Client.from_service_account_json(
+                        settings.gcs_credentials_path,
+                        project=settings.gcs_project_id
+                    )
+                    logger.info("✅ Google Cloud Storage client initialized (using service account)")
+                else:
+                    logger.warning(f"⚠️ Failed to initialize GCS client: {gcloud_error}")
+                    logger.info("Running in mock mode for development")
+                    self._force_mock = True
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize GCS client: {e}")
+            logger.info("Running in mock mode for development")
+            self._force_mock = True
     
     @property
     def is_mock_mode(self) -> bool:
         """Check if running in mock mode"""
-        return self._client is None
+        return self._client is None or self._force_mock
     
     async def upload_video(
         self,
@@ -82,16 +101,39 @@ class StorageService:
             
             # Real GCS upload
             logger.info(f"Uploading to gs://{bucket_name}/{blob_name}")
-            bucket = self._client.bucket(bucket_name)
-            blob = bucket.blob(blob_name)
             
-            # Upload from file-like object
-            await video_file.seek(0)
-            content = await video_file.read()
-            blob.upload_from_string(content, content_type=video_file.content_type)
-            
-            logger.info(f"✅ Uploaded to gs://{bucket_name}/{blob_name}")
-            return f"gs://{bucket_name}/{blob_name}"
+            try:
+                bucket = self._client.bucket(bucket_name)
+                blob = bucket.blob(blob_name)
+                
+                # Upload from file-like object
+                await video_file.seek(0)
+                content = await video_file.read()
+                blob.upload_from_string(content, content_type=video_file.content_type)
+                
+                logger.info(f"✅ Uploaded to gs://{bucket_name}/{blob_name}")
+                return f"gs://{bucket_name}/{blob_name}"
+                
+            except Exception as gcs_error:
+                # Fallback to local storage on any GCS error
+                error_msg = str(gcs_error)
+                if "billing" in error_msg.lower() or "accountDisabled" in error_msg or "403" in error_msg:
+                    logger.warning(f"⚠️ GCS error (billing/permissions), permanently switching to local storage")
+                    self._force_mock = True  # Force all future operations to use local storage
+                else:
+                    logger.warning(f"⚠️ GCS upload failed, falling back to local storage: {error_msg}")
+                
+                # Save to local storage
+                local_path = os.path.join(settings.temp_storage_path, blob_name)
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                
+                await video_file.seek(0)
+                async with aiofiles.open(local_path, 'wb') as f:
+                    content = await video_file.read()
+                    await f.write(content)
+                
+                logger.info(f"📁 Saved to local storage: {local_path}")
+                return f"gs://{bucket_name}/{blob_name}"
             
         except Exception as e:
             logger.error(f"Failed to upload video: {e}", exc_info=True)
@@ -153,14 +195,28 @@ class StorageService:
         if self.is_mock_mode:
             # Mock mode: copy from temp storage
             mock_path = os.path.join(settings.temp_storage_path, blob_name)
-            if os.path.exists(mock_path):
+            logger.info(f"📁 Mock mode: downloading from {mock_path} to {local_path}")
+            
+            if not os.path.exists(mock_path):
+                raise FileNotFoundError(f"Source file not found: {mock_path}")
+            
+            file_size = os.path.getsize(mock_path)
+            logger.info(f"📦 Source file size: {file_size / (1024*1024):.2f} MB")
+            
+            try:
                 async with aiofiles.open(mock_path, 'rb') as src:
                     content = await src.read()
+                    logger.info(f"✅ Read {len(content)} bytes from source")
                     async with aiofiles.open(local_path, 'wb') as dst:
                         await dst.write(content)
-                logger.info(f"📁 Mock download: copied from {mock_path}")
-            else:
-                logger.warning(f"⚠️ Mock file not found: {mock_path}")
+                        logger.info(f"✅ Wrote {len(content)} bytes to {local_path}")
+                
+                # Verify the download
+                downloaded_size = os.path.getsize(local_path)
+                logger.info(f"📁 Mock download complete: {downloaded_size / (1024*1024):.2f} MB")
+            except Exception as e:
+                logger.error(f"❌ Failed to copy file: {e}", exc_info=True)
+                raise
             return
         
         # Real GCS download

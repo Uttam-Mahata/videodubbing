@@ -67,15 +67,11 @@ class GeminiAudioService:
         logger.info(f"Starting transcription for job {job_id}: {audio_path}")
         
         try:
-            # Upload audio file to Gemini Files API
-            uploaded_file = await self.circuit_breaker.call(
-                self._upload_audio_file,
-                audio_path
-            )
+            # Upload audio file to Gemini Files API (sync operation)
+            uploaded_file = self._upload_audio_file(audio_path)
             
-            # Generate transcription with structured output
-            transcript = await self.circuit_breaker.call(
-                self._generate_transcript,
+            # Generate transcription with structured output (async operation)
+            transcript = await self._generate_transcript(
                 uploaded_file,
                 language
             )
@@ -118,30 +114,48 @@ class GeminiAudioService:
         uploaded_file: genai.types.File,
         language: Optional[str] = None,
     ) -> Transcript:
-        """Generate transcript with structured output"""
+        """Generate transcript with structured output including emotion detection"""
         
-        # Build prompt with language hint if provided
+        # Build enhanced prompt for emotion and language detection
         prompt = (
-            "Generate a detailed transcript with speaker identification and "
-            "precise timestamps in seconds (decimal format). "
-            "Include confidence scores for each segment."
+            "Generate a detailed transcript with:\n"
+            "1. Speaker identification (label each speaker as Speaker_1, Speaker_2, etc.)\n"
+            "2. Precise timestamps in seconds (decimal format)\n"
+            "3. Confidence scores for each segment\n"
+            "4. Emotional tone for each segment (e.g., cheerful, serious, excited, calm, sad, angry, neutral)\n"
         )
         
         if language:
-            prompt += f" The audio is in {language}."
+            prompt += f"\nThe audio is in {language}."
+        else:
+            prompt += "\nAuto-detect the language and include it in your analysis."
         
-        logger.debug(f"Generating transcript with prompt: {prompt}")
+        logger.info(f"🎤 Generating transcript with emotion detection")
         
         try:
-            # Call Gemini API with structured output
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=[prompt, uploaded_file],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=list[TranscriptSegment],
-                )
+            # Call Gemini API with structured output (run in thread pool for sync API)
+            loop = asyncio.get_event_loop()
+            logger.info("📡 Calling Gemini API for transcription...")
+            
+            # Add timeout to prevent hanging
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: self.client.models.generate_content(
+                        model=self.model,
+                        contents=[prompt, uploaded_file],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=list[TranscriptSegment],
+                            temperature=0.1,
+                            response_modalities=["TEXT"],
+                        )
+                    )
+                ),
+                timeout=180.0  # 3 minute timeout
             )
+            
+            logger.info("✅ Received response from Gemini API")
             
             # Parse structured response
             segments_data = response.parsed
@@ -150,20 +164,59 @@ class GeminiAudioService:
                 logger.warning("No segments returned from transcription")
                 segments_data = []
             
+            # Detect language from response if not provided
+            detected_language = language
+            if not detected_language or detected_language == "auto":
+                # Use Gemini to detect language
+                logger.info("🌐 Detecting language...")
+                detected_language = await self._detect_language(uploaded_file)
+                logger.info(f"✅ Language detected: {detected_language}")
+            
             # Create Transcript object
             transcript = Transcript(
                 job_id="",  # Will be set by caller
                 segments=segments_data,
-                language=language or "unknown",
+                language=detected_language or "unknown",
             )
             
-            logger.debug(f"Parsed {len(transcript.segments)} transcript segments")
+            logger.info(
+                f"✅ Parsed {len(transcript.segments)} transcript segments with emotions. "
+                f"Language: {detected_language}"
+            )
             
             return transcript
             
+        except asyncio.TimeoutError:
+            logger.error("⏱️ Transcription request timed out after 5 minutes")
+            raise Exception("Transcription request timed out. The audio file may be too long or the API is slow.")
         except Exception as e:
-            logger.error(f"Failed to generate transcript: {e}")
+            logger.error(f"Failed to generate transcript: {e}", exc_info=True)
             raise
+    
+    async def _detect_language(self, uploaded_file: genai.types.File) -> Optional[str]:
+        """Detect language from audio file"""
+        try:
+            # Run in thread pool for sync API
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.models.generate_content(
+                    model=self.model,
+                    contents=[
+                        "What language is being spoken in this audio? "
+                        "Respond with only the BCP-47 language code (e.g., en-US, es-ES, fr-FR).",
+                        uploaded_file
+                    ],
+                )
+            )
+            
+            detected_lang = response.text.strip()
+            logger.info(f"Detected language: {detected_lang}")
+            return detected_lang
+            
+        except Exception as e:
+            logger.warning(f"Language detection failed: {e}")
+            return None
     
     async def transcribe_with_retry(
         self,
@@ -221,9 +274,14 @@ class GeminiAudioService:
         try:
             uploaded_file = self._upload_audio_file(audio_path)
             
-            response = self.client.models.count_tokens(
-                model=self.model,
-                contents=[uploaded_file]
+            # Run in thread pool for sync API
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.models.count_tokens(
+                    model=self.model,
+                    contents=[uploaded_file]
+                )
             )
             
             # Gemini represents audio as 32 tokens/second

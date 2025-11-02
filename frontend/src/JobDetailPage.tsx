@@ -4,6 +4,7 @@ import { ArrowLeft, Download, RotateCcw, X, AlertCircle } from 'lucide-react';
 import { Layout } from './Layout';
 import { apiClient } from './api';
 import { ProgressTracker } from './ProgressTracker';
+import { SpeakerDisplay } from './SpeakerDisplay';
 import { JobStatus } from './types';
 import type { Job } from './types';
 
@@ -157,8 +158,9 @@ export function JobDetailPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-2 space-y-6">
             <ProgressTracker job={job} />
+            <SpeakerDisplay jobId={job.job_id} />
           </div>
 
           <div className="space-y-6">
