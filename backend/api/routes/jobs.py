@@ -89,6 +89,7 @@ async def create_job(
         job = Job(
             user_id=user_id,
             status=JobStatus.QUEUED,
+            current_stage=JobStage.INTAKE,
             source_language=source_language,
             target_language=target_language,
             voice_config=voice_config,
@@ -471,3 +472,60 @@ async def retry_job(job_id: str):
     except Exception as e:
         logger.error(f"Failed to retry job: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to retry job: {str(e)}")
+
+
+@router.get("/jobs/{job_id}/speakers")
+async def get_speaker_analysis(job_id: str):
+    """
+    Get speaker analysis for a job
+    
+    **Returns:**
+    - Number of detected speakers
+    - Speaker profiles with emotions and voice assignments
+    - Detected language
+    
+    **Note:** Only available after transcription stage
+    """
+    logger.info(f"Getting speaker analysis for job: {job_id}")
+    
+    try:
+        # Validate job ID
+        try:
+            ObjectId(job_id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="Invalid job ID format")
+        
+        # Get job
+        job = await JobRepository.get_by_id(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Check if job has progressed past transcription
+        if job.status == JobStatus.QUEUED or job.status == JobStatus.PROCESSING:
+            return {
+                "job_id": job_id,
+                "status": "pending",
+                "message": "Speaker analysis not yet available"
+            }
+        
+        # Get metadata
+        metadata = job.metadata
+        if not metadata:
+            raise HTTPException(status_code=404, detail="Metadata not available")
+        
+        # For now, return metadata-level speaker info
+        # TODO: Implement full SpeakerAnalysis with detailed profiles from transcript
+        return {
+            "job_id": job_id,
+            "status": "completed",
+            "total_speakers": metadata.detected_speakers or 1,
+            "detected_language": metadata.detected_language or job.source_language,
+            "language_confidence": metadata.language_confidence or 1.0,
+            "voice_assignments": job.voice_config.speaker_voice_map if job.voice_config else {},
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get speaker analysis: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get speaker analysis: {str(e)}")

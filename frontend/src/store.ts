@@ -27,7 +27,7 @@ export const useDubbingStore = create<DubbingState>((set) => ({
   jobStatus: null,
   uploadProgress: 0,
   isUploading: false,
-  sourceLanguage: 'en-US',
+  sourceLanguage: 'auto',
   targetLanguage: 'es-US',
   primaryVoice: 'Kore',
   secondaryVoice: null,

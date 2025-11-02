@@ -24,9 +24,9 @@ from backend.agents.prompts import (
 logger = logging.getLogger(__name__)
 
 # Initialize services
-audio_service = GeminiAudioService(api_key=settings.gemini_api_key)
-llm_service = GeminiLLMService(api_key=settings.gemini_api_key)
-tts_service = GeminiTTSService(api_key=settings.gemini_api_key)
+audio_service = GeminiAudioService()
+llm_service = GeminiLLMService()
+tts_service = GeminiTTSService()
 
 
 # ====================
@@ -40,41 +40,76 @@ async def transcribe_audio_tool(
     tool_context: ToolContext,
 ) -> dict:
     """
-    Tool to transcribe audio using Gemini Audio API.
+    Tool to transcribe audio using Gemini Audio API with speaker and emotion detection.
 
     Args:
         audio_path: Path to the audio file
-        source_language: Source language code (e.g., 'en', 'es')
+        source_language: Source language code (e.g., 'en-US', 'es-ES') or None for auto-detection
         tool_context: ADK tool context for state management
 
     Returns:
-        Dictionary with transcript and speaker_count
+        Dictionary with transcript, speaker_count, emotions, and detected_language
     """
     logger.info(f"Transcribing audio: {audio_path}")
 
     try:
-        # Call Gemini Audio API with retry logic
+        # Call Gemini Audio API with retry logic (supports language auto-detection)
         transcript = await audio_service.transcribe_with_retry(
             audio_path=audio_path,
-            source_language=source_language,
+            language=source_language if source_language and source_language.lower() != "auto" else None,
         )
 
-        # Calculate speaker count
-        speakers = set(seg.speaker for seg in transcript.segments if seg.speaker)
+        # Analyze speakers and emotions
+        speakers = {}
+        for seg in transcript.segments:
+            if seg.speaker:
+                if seg.speaker not in speakers:
+                    speakers[seg.speaker] = {
+                        "segment_count": 0,
+                        "total_duration": 0.0,
+                        "emotions": []
+                    }
+                speakers[seg.speaker]["segment_count"] += 1
+                speakers[seg.speaker]["total_duration"] += (seg.end_time - seg.start_time)
+                if seg.emotion:
+                    speakers[seg.speaker]["emotions"].append(seg.emotion)
+        
         speaker_count = len(speakers)
+        
+        # Determine dominant emotion for each speaker
+        speaker_profiles = {}
+        for speaker_id, data in speakers.items():
+            dominant_emotion = None
+            if data["emotions"]:
+                # Most common emotion
+                emotion_counts = {}
+                for emotion in data["emotions"]:
+                    emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
+                dominant_emotion = max(emotion_counts, key=emotion_counts.get)
+            
+            speaker_profiles[speaker_id] = {
+                "segment_count": data["segment_count"],
+                "total_duration": data["total_duration"],
+                "dominant_emotion": dominant_emotion
+            }
 
         # Store in tool context
         tool_context.state["transcript"] = transcript
         tool_context.state["speaker_count"] = speaker_count
+        tool_context.state["speaker_profiles"] = speaker_profiles
+        tool_context.state["detected_language"] = transcript.language
 
         logger.info(
-            f"Transcription complete: {len(transcript.segments)} segments, {speaker_count} speakers"
+            f"Transcription complete: {len(transcript.segments)} segments, "
+            f"{speaker_count} speakers, language: {transcript.language}"
         )
 
         return {
             "status": "success",
             "segments_count": len(transcript.segments),
             "speaker_count": speaker_count,
+            "detected_language": transcript.language,
+            "speaker_profiles": speaker_profiles,
         }
 
     except Exception as e:
@@ -146,43 +181,52 @@ async def synthesize_speech_tool(
     tool_context: ToolContext,
 ) -> dict:
     """
-    Tool to generate speech from translated segments using Gemini TTS.
+    Tool to generate speech from translated segments using Gemini TTS with auto voice assignment.
 
     Args:
         tool_context: ADK tool context
 
     Returns:
-        Dictionary with synthesis status and audio segment paths
+        Dictionary with synthesis status, audio segment paths, and voice mappings
     """
     translation_segments = tool_context.state.get("translation_segments")
-    voice_config = tool_context.state.get("voice_config")
+    transcript = tool_context.state.get("transcript")
+    speaker_profiles = tool_context.state.get("speaker_profiles", {})
+    speaker_count = tool_context.state.get("speaker_count", 1)
     job_id = tool_context.state.get("job_id", "unknown")
 
-    if not translation_segments or not voice_config:
+    if not translation_segments or not transcript:
         return {
             "status": "error",
-            "message": "Missing translation segments or voice config",
+            "message": "Missing translation segments or transcript",
         }
 
-    logger.info(f"Synthesizing speech for {len(translation_segments)} segments")
+    logger.info(f"Synthesizing speech for {len(translation_segments)} segments with {speaker_count} speakers")
 
     try:
+        # Auto-assign voices to speakers based on characteristics
+        voice_assignments = _auto_assign_voices(speaker_profiles, speaker_count)
+        
         # Create temporary directory for audio files
         temp_dir = tempfile.mkdtemp(prefix=f"job_{job_id}_")
         audio_segments = []
 
         # Generate audio for each segment
-        for i, segment in enumerate(translation_segments):
+        for i, (trans_seg, orig_seg) in enumerate(zip(translation_segments, transcript.segments)):
             audio_path = os.path.join(temp_dir, f"segment_{i:04d}.wav")
+            
+            # Get speaker-specific voice
+            speaker_id = orig_seg.speaker
+            voice_name = voice_assignments.get(speaker_id, "Kore")
+            emotion = orig_seg.emotion or "neutral"
 
-            # Use single-speaker synthesis (TODO: multi-speaker)
+            # Synthesize with speaker's assigned voice and detected emotion
             await tts_service.synthesize_single_speaker(
-                text=segment.translated_text,
-                voice_name=voice_config.voice_name,
-                language=voice_config.language,
-                output_path=audio_path,
-                emotion=segment.emotion_tag,
+                text=trans_seg.translated_text,
+                voice_name=voice_name,
+                emotion=emotion,
                 pace="normal",
+                output_path=audio_path,
             )
 
             audio_segments.append(audio_path)
@@ -190,18 +234,74 @@ async def synthesize_speech_tool(
         # Store in context
         tool_context.state["audio_segments"] = audio_segments
         tool_context.state["temp_storage_path"] = temp_dir
+        tool_context.state["voice_assignments"] = voice_assignments
 
-        logger.info(f"Synthesis complete: {len(audio_segments)} audio files")
+        logger.info(
+            f"Synthesis complete: {len(audio_segments)} audio files, "
+            f"voice assignments: {voice_assignments}"
+        )
 
         return {
             "status": "success",
             "segments_count": len(audio_segments),
             "temp_dir": temp_dir,
+            "voice_assignments": voice_assignments,
         }
 
     except Exception as e:
         logger.error(f"Speech synthesis failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+def _auto_assign_voices(speaker_profiles: dict, speaker_count: int) -> dict:
+    """
+    Auto-assign voices to speakers based on their characteristics.
+    
+    Args:
+        speaker_profiles: Dictionary of speaker profiles with emotion data
+        speaker_count: Number of unique speakers
+    
+    Returns:
+        Dictionary mapping speaker_id to voice_name
+    """
+    from backend.models.voice import AVAILABLE_VOICES, VoiceStyle
+    
+    # Define voice pools by characteristic
+    professional_voices = ["Kore", "Orus", "Charon", "Alnilam", "Schedar"]
+    friendly_voices = ["Puck", "Aoede", "Achird", "Laomedeia", "Sulafat"]
+    calm_voices = ["Algieba", "Despina", "Umbriel", "Achernar", "Vindemiatrix"]
+    energetic_voices = ["Zephyr", "Fenrir", "Leda", "Sadachbia"]
+    mature_voices = ["Gacrux", "Rasalgethi", "Sadaltager"]
+    
+    assignments = {}
+    available_voices = list(AVAILABLE_VOICES.keys())
+    
+    for idx, (speaker_id, profile) in enumerate(speaker_profiles.items()):
+        # Select voice based on dominant emotion
+        emotion = profile.get("dominant_emotion", "neutral")
+        
+        if emotion in ["cheerful", "excited", "happy"]:
+            voice_pool = energetic_voices
+        elif emotion in ["serious", "professional", "informative"]:
+            voice_pool = professional_voices
+        elif emotion in ["calm", "gentle", "soft"]:
+            voice_pool = calm_voices
+        elif emotion in ["friendly", "casual", "warm"]:
+            voice_pool = friendly_voices
+        else:
+            voice_pool = available_voices
+        
+        # Assign voice, cycling through pool if needed
+        voice_idx = idx % len(voice_pool)
+        assignments[speaker_id] = voice_pool[voice_idx]
+    
+    # If no speaker profiles, use default assignment
+    if not assignments and speaker_count > 0:
+        for i in range(speaker_count):
+            speaker_id = f"Speaker_{i+1}"
+            assignments[speaker_id] = available_voices[i % len(available_voices)]
+    
+    return assignments
 
 
 # ====================

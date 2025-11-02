@@ -81,3 +81,23 @@ export interface JobProgress {
   status: 'processing' | 'completed' | 'error';
   message?: string;
 }
+
+export interface SpeakerProfile {
+  speaker_id: string;
+  segment_count: number;
+  total_duration: number;
+  dominant_emotion: string | null;
+  assigned_voice: string | null;
+  voice_characteristics: string | null;
+}
+
+export interface SpeakerAnalysis {
+  job_id: string;
+  status: 'pending' | 'completed';
+  message?: string;
+  total_speakers?: number;
+  detected_language?: string;
+  language_confidence?: number;
+  voice_assignments?: Record<string, string>;
+  speakers?: SpeakerProfile[];
+}
